@@ -22,6 +22,7 @@ firebase.initializeApp(firebaseConfig);
 
 const db = admin.firestore();
 
+// Get Screams
 app.get("/screams", (req, res) => {
   db.collection("screams")
     .orderBy("createdAt", "desc")
@@ -41,10 +42,50 @@ app.get("/screams", (req, res) => {
     .catch(err => console.error(err));
 });
 
-app.post("/scream", (req, res) => {
+const FBAuth = (req, res, next) => {
+  let idToken;
+  if (
+    req.headers.authorization &&
+    req.headers.authorization.startsWith("Bearer ")
+  ) {
+    idToken = req.headers.authorization.split("Bearer ")[1];
+  } else {
+    console.error("No token found");
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+  admin
+    .auth()
+    .verifyIdToken(idToken)
+    .then(decodedToken => {
+      req.user = decodedToken;
+      return db
+        .collection("users")
+        .where("userId", "==", req.user.uid)
+        .limit(1)
+        .get();
+    })
+    .then(data => {
+      req.user.handle = data.docs[0].data().handle;
+      return next();
+    })
+    .catch(err => {
+      console.error("Error while verifying token", err);
+      if (err.code === "auth/argument-error") {
+        return res.status(403).json({token: "Error while verifying token"});
+      }
+      return res.status(500).json(err);
+    });
+};
+
+// Post scream
+app.post("/scream", FBAuth, (req, res) => {
+  if (req.body.body.trim() === "") {
+    return res.status(400).json({ body: "Body must not be empty!" });
+  }
+
   const newScream = {
-    body: req.body.body,
-    userHandle: req.body.userHandle,
+    body: req.body.body, // We only need to send a body
+    userHandle: req.user.handle,
     createdAt: new Date().toISOString()
   };
 
@@ -165,6 +206,10 @@ app.post("/login", (req, res) => {
         return res
           .status(403)
           .json({ general: "Wrong credentials please try again" });
+      } else if (err.code === "auth/user-not-found") {
+        return res
+          .status(403)
+          .json({ registration: "You are not registered on the platform!" });
       } else {
         return res.status(500).json({ error: err.code });
       }
